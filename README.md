@@ -21,7 +21,7 @@ Two trams on the same route passing each other triggers a tone. Congestion adds 
 | OCT | Shift all pitches up or down by octave |
 | BPM | Sets tempo — affects delay echo timing |
 | SCALE | Choose the musical scale (minor pentatonic, major, blues, etc.) |
-| INST | Instrument voice — aphex, piano, old piano, strings, 303 |
+| INST | Instrument voice — default, piano, old piano, strings, 303 |
 | Route buttons | Click to mute / unmute individual tram routes |
 
 ## Stack
@@ -38,4 +38,4 @@ npm install
 npm run dev
 ```
 
-Set `VITE_USE_MOCK=true` in `.env` to run without a PTV API key.
+Set `VITE_USE_MOCK=true` in `.env` to run without a PTV API key. Still waiting for the PTV API :(
