@@ -47,7 +47,7 @@ export function useTramDepartures(onArrival) {
 
           if (justMissed || crossedNow) {
             onArrivalRef.current({
-              routeNumber: dep.route?.route_number ?? dep.route_id,
+              routeNumber: dep.route_number ?? dep.route_id,
               stopId: stop.id,
               lng: stop.lng,
               lat: stop.lat,

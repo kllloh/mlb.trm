@@ -36,10 +36,14 @@ export async function fetchStopsForRoute(routeId) {
   return data.stops.sort((a, b) => a.stop_sequence - b.stop_sequence)
 }
 
-// Upcoming departures from a stop (next 60 minutes)
+// Upcoming departures from a stop — resolves route_number from the routes dict
 export async function fetchDepartures(stopId) {
   const data = await ptvGet(
-    `/v3/departures/route_type/1/stop/${stopId}?max_results=20&expand=run&expand=route`
+    `/v3/departures/route_type/1/stop/${stopId}?max_results=20&expand=route`
   )
-  return data.departures
+  const routesById = data.routes ?? {}
+  return data.departures.map(dep => ({
+    ...dep,
+    route_number: routesById[dep.route_id]?.route_number ?? null,
+  }))
 }
