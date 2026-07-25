@@ -1,15 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { fetchDepartures } from '../lib/ptv'
 
-// CBD tram stops covering the main corridors. Each entry is a stop_id
-// from the PTV API. You can add more stops to widen coverage.
+// CBD tram stops covering the main corridors.
 const MONITORED_STOPS = [
-  2171,  // Flinders St / Swanston St (route 1,3,3a,5,6,8,16,64,67,72)
-  2961,  // Spencer St / Collins St (routes 11,12,48,109)
-  2177,  // Elizabeth St / Bourke St (routes 19,57,59,86)
-  3000,  // La Trobe St / Swanston St (routes 1,3,3a,5,6,8)
-  2183,  // Bourke St Mall / Swanston St
+  { id: 2171, lng: 144.9665, lat: -37.8183 },  // Flinders St / Swanston St
+  { id: 2961, lng: 144.9523, lat: -37.8183 },  // Spencer St / Collins St
+  { id: 2177, lng: 144.9604, lat: -37.8129 },  // Elizabeth St / Bourke St
+  { id: 3000, lng: 144.9665, lat: -37.8077 },  // La Trobe St / Swanston St
+  { id: 2183, lng: 144.9641, lat: -37.8129 },  // Bourke St Mall / Swanston St
 ]
+
+const STOP_COORDS = Object.fromEntries(MONITORED_STOPS.map(s => [s.id, { lng: s.lng, lat: s.lat }]))
 
 const POLL_MS = 30_000
 
@@ -26,11 +27,11 @@ export function useTramDepartures(onArrival) {
     const now = Date.now()
 
     try {
-      for (const stopId of MONITORED_STOPS) {
-        const departures = await fetchDepartures(stopId)
+      for (const stop of MONITORED_STOPS) {
+        const departures = await fetchDepartures(stop.id)
 
         for (const dep of departures) {
-          const key = `${dep.run_ref}-${stopId}`
+          const key = `${dep.run_ref}-${stop.id}`
           const scheduled = dep.estimated_departure_utc ?? dep.scheduled_departure_utc
           if (!scheduled) continue
 
@@ -41,7 +42,9 @@ export function useTramDepartures(onArrival) {
           if (prev && new Date(prev).getTime() > now - POLL_MS && t <= now) {
             onArrivalRef.current({
               routeNumber: dep.route?.route_number ?? dep.route_id,
-              stopId,
+              stopId: stop.id,
+              lng: stop.lng,
+              lat: stop.lat,
               scheduledDeparture: scheduled,
             })
           }

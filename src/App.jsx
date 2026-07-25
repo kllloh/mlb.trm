@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import TramMap from './components/TramMap'
 import TonePanel from './components/TonePanel'
 import { useRoutes } from './hooks/useRoutes'
@@ -10,6 +10,7 @@ import { MOCK_ROUTES } from './mock/mockData'
 import { getTramPositions, setSimulatorBpm } from './mock/simulator'
 
 const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+const LIVE_DOT_TTL = 45_000  // ms a dot stays visible after arrival
 
 export default function App() {
   const { geojson, loading, error } = useRoutes()
@@ -74,7 +75,25 @@ export default function App() {
   // ── Tone engine ───────────────────────────────────────────────────────────
   const { trigger, triggerCrossing, active, crossings } = useToneEngine(freqMap, octave, muted, congested, incidents, instrumentSet)
 
-  const handleArrival  = useCallback((e) => trigger(e),         [trigger])
+  // ── Live dot tracking (non-mock only) ────────────────────────────────────
+  const liveDotsRef = useRef(new Map())  // key → { routeNumber, lng, lat, expiresAt }
+  const getLiveDots = useCallback(() => {
+    const now = Date.now()
+    const result = []
+    for (const [key, dot] of liveDotsRef.current) {
+      if (now > dot.expiresAt) { liveDotsRef.current.delete(key); continue }
+      result.push({ id: key, routeNumber: String(dot.routeNumber), lng: dot.lng, lat: dot.lat })
+    }
+    return result
+  }, [])
+
+  const handleArrival = useCallback((e) => {
+    trigger(e)
+    if (!IS_MOCK && e.lng != null) {
+      const key = `${e.routeNumber}-${e.stopId}`
+      liveDotsRef.current.set(key, { routeNumber: e.routeNumber, lng: e.lng, lat: e.lat, expiresAt: Date.now() + LIVE_DOT_TTL })
+    }
+  }, [trigger])
   const handleCrossing = useCallback((e) => triggerCrossing(e), [triggerCrossing])
 
   useDepartures(handleArrival, handleCrossing, paused, handleDisrupt)
@@ -88,7 +107,7 @@ export default function App() {
         congested={congested}
         incidents={incidents}
         stopsGeojson={IS_MOCK ? stopsGeojson : null}
-        getPositions={IS_MOCK ? getTramPositions : null}
+        getPositions={IS_MOCK ? getTramPositions : getLiveDots}
       />
       <TonePanel
         active={active}     crossings={crossings}
