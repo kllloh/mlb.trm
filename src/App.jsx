@@ -102,12 +102,12 @@ export default function App() {
         incidents={incidents}
       />
 
-      {IS_MOCK && !started && (
+      {!started && (
         <button style={startBtnStyle} onClick={() => { unlock(); setStarted(true) }}>
-          click to start
+          {IS_MOCK || !loading ? 'click to start' : 'loading tram network…'}
         </button>
       )}
-      {!IS_MOCK && loading && <div style={overlayStyle}>loading tram network…</div>}
+      {!IS_MOCK && loading && started && <div style={overlayStyle}>loading tram network…</div>}
       {!IS_MOCK && error && (
         <div style={{ ...overlayStyle, color: '#ff6b6b' }}>
           API error: {error} <br /><small>Check your .env keys.</small>
