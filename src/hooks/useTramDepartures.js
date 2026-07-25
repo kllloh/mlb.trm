@@ -14,17 +14,21 @@ const STOP_COORDS = Object.fromEntries(MONITORED_STOPS.map(s => [s.id, { lng: s.
 
 const POLL_MS = 30_000
 
-// Fires onArrival({ routeNumber, stopId, scheduledDeparture }) when a
-// departure time crosses from future to past between two polls.
+// Fires onArrival({ routeNumber, stopId, lng, lat, scheduledDeparture }) when
+// a departure is detected. On the first poll, fires for any departure within
+// the last 3 minutes so there's immediate feedback.
 export function useTramDepartures(onArrival) {
   const [status, setStatus] = useState('idle') // idle | polling | error
   const prevDepartures = useRef({}) // key → ISO string
+  const isFirstPoll = useRef(true)
   const onArrivalRef = useRef(onArrival)
   onArrivalRef.current = onArrival
 
   const poll = useCallback(async () => {
     setStatus('polling')
     const now = Date.now()
+    const first = isFirstPoll.current
+    if (first) isFirstPoll.current = false
 
     try {
       for (const stop of MONITORED_STOPS) {
@@ -38,8 +42,10 @@ export function useTramDepartures(onArrival) {
           const t = new Date(scheduled).getTime()
           const prev = prevDepartures.current[key]
 
-          // Was in the future last poll, now in the past → arrival
-          if (prev && new Date(prev).getTime() > now - POLL_MS && t <= now) {
+          const justMissed = first && t <= now && now - t < 3 * 60_000
+          const crossedNow = !first && prev && new Date(prev).getTime() > now - POLL_MS && t <= now
+
+          if (justMissed || crossedNow) {
             onArrivalRef.current({
               routeNumber: dep.route?.route_number ?? dep.route_id,
               stopId: stop.id,
