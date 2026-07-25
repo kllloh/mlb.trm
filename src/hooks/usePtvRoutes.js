@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { fetchTramRoutes, fetchStopsForRoute } from '../lib/ptv'
+import { fetchTramRoutes } from '../lib/ptv'
 import { toneForRoute } from '../lib/routeTones'
+import { ROUTE_LINES } from '../mock/routeLines'
 
-// Builds a GeoJSON FeatureCollection of LineStrings (one per route)
-// by joining ordered stop lat/lng. Requires VITE_PTV_* keys to be set.
+// Builds GeoJSON from pre-extracted GTFS shape data (routeLines.js) so route
+// lines follow actual track geometry. Route metadata still comes from the PTV API.
 export function usePtvRoutes() {
   const [geojson, setGeojson] = useState(null)
   const [error, setError] = useState(null)
@@ -16,28 +17,23 @@ export function usePtvRoutes() {
       try {
         const routes = await fetchTramRoutes()
 
-        const features = await Promise.all(
-          routes.map(async (route) => {
-            const stops = await fetchStopsForRoute(route.route_id)
-            const coords = stops
-              .filter(s => s.stop_longitude && s.stop_latitude)
-              .map(s => [s.stop_longitude, s.stop_latitude])
-
+        const features = routes
+          .filter(r => ROUTE_LINES[String(r.route_number)])
+          .map(route => {
+            const coords = ROUTE_LINES[String(route.route_number)]
             const tone = toneForRoute(route.route_number)
-
             return {
               type: 'Feature',
               geometry: { type: 'LineString', coordinates: coords },
               properties: {
                 routeId: route.route_id,
-                routeNumber: route.route_number,
+                routeNumber: String(route.route_number),
                 routeName: route.route_name,
                 color: tone.color,
                 note: tone.note,
               },
             }
           })
-        )
 
         if (!cancelled) {
           setGeojson({ type: 'FeatureCollection', features })
