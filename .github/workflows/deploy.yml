@@ -31,7 +31,9 @@ jobs:
 
       - run: npm run build
         env:
-          VITE_USE_MOCK: true
+          VITE_USE_MOCK: false
+          VITE_PTV_DEV_ID: ${{ secrets.VITE_PTV_DEV_ID }}
+          VITE_PTV_API_KEY: ${{ secrets.VITE_PTV_API_KEY }}
 
       - uses: actions/configure-pages@v4
 
