@@ -8,9 +8,22 @@ import { unlock, setBpm, playIncident } from './lib/audioEngine'
 import { buildFreqMap } from './lib/routeTones'
 import { MOCK_ROUTES } from './mock/mockData'
 import { getTramPositions, setSimulatorBpm } from './mock/simulator'
+import { ROUTE_LINES } from './mock/routeLines'
 
 const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
-const LIVE_DOT_TTL = 45_000  // ms a dot stays visible after arrival
+const LIVE_DOT_TTL = 60_000
+
+// Snap a [lng, lat] point to the nearest coordinate on a route's line
+function snapToRoute(routeNumber, lng, lat) {
+  const line = ROUTE_LINES[String(routeNumber)]
+  if (!line) return { lng, lat }
+  let best = line[0], bestD = Infinity
+  for (const [lx, ly] of line) {
+    const d = (lx - lng) ** 2 + (ly - lat) ** 2
+    if (d < bestD) { bestD = d; best = [lx, ly] }
+  }
+  return { lng: best[0], lat: best[1] }
+}
 
 export default function App() {
   const { geojson, loading, error } = useRoutes()
@@ -91,7 +104,8 @@ export default function App() {
     trigger(e)
     if (!IS_MOCK && e.lng != null) {
       const key = `${e.routeNumber}-${e.stopId}`
-      liveDotsRef.current.set(key, { routeNumber: e.routeNumber, lng: e.lng, lat: e.lat, expiresAt: Date.now() + LIVE_DOT_TTL })
+      const snapped = snapToRoute(e.routeNumber, e.lng, e.lat)
+      liveDotsRef.current.set(key, { routeNumber: e.routeNumber, lng: snapped.lng, lat: snapped.lat, expiresAt: Date.now() + LIVE_DOT_TTL })
     }
   }, [trigger])
   const handleCrossing = useCallback((e) => triggerCrossing(e), [triggerCrossing])

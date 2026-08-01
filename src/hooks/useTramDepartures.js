@@ -12,14 +12,16 @@ const MONITORED_STOPS = [
 
 const STOP_COORDS = Object.fromEntries(MONITORED_STOPS.map(s => [s.id, { lng: s.lng, lat: s.lat }]))
 
-const POLL_MS = 10_000
+const POLL_MS    = 10_000
+const REFIRE_MS  = 90_000  // min gap before re-firing the same tram
 
 // Fires onArrival({ routeNumber, stopId, lng, lat, scheduledDeparture }) when
 // a departure is detected. On the first poll, fires for any departure within
 // the last 3 minutes so there's immediate feedback.
 export function useTramDepartures(onArrival) {
   const [status, setStatus] = useState('idle') // idle | polling | error
-  const prevDepartures = useRef({}) // key → ISO string
+  const prevDepartures = useRef({}) // key → scheduled ISO string
+  const lastFired      = useRef({}) // key → timestamp ms
   const isFirstPoll = useRef(true)
   const onArrivalRef = useRef(onArrival)
   onArrivalRef.current = onArrival
@@ -42,12 +44,13 @@ export function useTramDepartures(onArrival) {
           const t = new Date(scheduled).getTime()
           const prev = prevDepartures.current[key]
 
-          // Fire when a departure enters the "imminent" window (due within 60s)
-          // and hasn't been fired before (no prev or prev was further away)
-          const imminent = t - now <= 60_000 && t - now > -POLL_MS
-          const notYetFired = !prev || new Date(prev).getTime() > now + 60_000
+          // Fire when a departure is due within 5 min, throttled to once per REFIRE_MS
+          const imminent = t - now <= 5 * 60_000 && t > now - POLL_MS
+          const lastF = lastFired.current[key] ?? 0
+          const canFire = now - lastF > REFIRE_MS
 
-          if (imminent && notYetFired) {
+          if (imminent && canFire) {
+            lastFired.current[key] = now
             onArrivalRef.current({
               routeNumber: dep.route_number ?? dep.route_id,
               stopId: stop.id,
