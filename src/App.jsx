@@ -11,18 +11,20 @@ import { getTramPositions, setSimulatorBpm } from './mock/simulator'
 import { ROUTE_LINES } from './mock/routeLines'
 
 const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
-const LIVE_DOT_TTL = 60_000
+const LIVE_DOT_TTL   = 90_000   // ms a dot lives after appearing
+const LIVE_DOT_SPEED = 0.00014  // route-line points per ms (~12 km/h in CBD)
 
-// Snap a [lng, lat] point to the nearest coordinate on a route's line
+// Snap [lng, lat] to nearest point on a route line; returns position + index
 function snapToRoute(routeNumber, lng, lat) {
   const line = ROUTE_LINES[String(routeNumber)]
-  if (!line) return { lng, lat }
-  let best = line[0], bestD = Infinity
-  for (const [lx, ly] of line) {
+  if (!line) return { lng, lat, index: 0 }
+  let best = line[0], bestIdx = 0, bestD = Infinity
+  for (let i = 0; i < line.length; i++) {
+    const [lx, ly] = line[i]
     const d = (lx - lng) ** 2 + (ly - lat) ** 2
-    if (d < bestD) { bestD = d; best = [lx, ly] }
+    if (d < bestD) { bestD = d; best = line[i]; bestIdx = i }
   }
-  return { lng: best[0], lat: best[1] }
+  return { lng: best[0], lat: best[1], index: bestIdx }
 }
 
 export default function App() {
@@ -89,13 +91,20 @@ export default function App() {
   const { trigger, triggerCrossing, active, crossings } = useToneEngine(freqMap, octave, muted, congested, incidents, instrumentSet)
 
   // ── Live dot tracking (non-mock only) ────────────────────────────────────
-  const liveDotsRef = useRef(new Map())  // key → { routeNumber, lng, lat, expiresAt }
+  // key → { routeNumber, lineKey, startIndex, direction, startTime, expiresAt }
+  const liveDotsRef = useRef(new Map())
   const getLiveDots = useCallback(() => {
     const now = Date.now()
     const result = []
     for (const [key, dot] of liveDotsRef.current) {
       if (now > dot.expiresAt) { liveDotsRef.current.delete(key); continue }
-      result.push({ id: key, routeNumber: String(dot.routeNumber), lng: dot.lng, lat: dot.lat })
+      const line = ROUTE_LINES[dot.lineKey]
+      if (!line) continue
+      const elapsed = now - dot.startTime
+      const rawIdx  = dot.startIndex + dot.direction * elapsed * LIVE_DOT_SPEED
+      const idx     = Math.max(0, Math.min(line.length - 1, Math.round(rawIdx)))
+      const [lng, lat] = line[idx]
+      result.push({ id: key, routeNumber: String(dot.routeNumber), lng, lat })
     }
     return result
   }, [])
@@ -103,9 +112,17 @@ export default function App() {
   const handleArrival = useCallback((e) => {
     trigger(e)
     if (!IS_MOCK && e.lng != null) {
-      const key = `${e.routeNumber}-${e.stopId}`
+      const key     = `${e.routeNumber}-${e.stopId}`
+      const lineKey = String(e.routeNumber)
       const snapped = snapToRoute(e.routeNumber, e.lng, e.lat)
-      liveDotsRef.current.set(key, { routeNumber: e.routeNumber, lng: snapped.lng, lat: snapped.lat, expiresAt: Date.now() + LIVE_DOT_TTL })
+      liveDotsRef.current.set(key, {
+        routeNumber: e.routeNumber,
+        lineKey,
+        startIndex:  snapped.index,
+        direction:   e.directionId === 1 ? -1 : 1,
+        startTime:   Date.now(),
+        expiresAt:   Date.now() + LIVE_DOT_TTL,
+      })
     }
   }, [trigger])
   const handleCrossing = useCallback((e) => triggerCrossing(e), [triggerCrossing])

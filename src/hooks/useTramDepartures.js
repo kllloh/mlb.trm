@@ -107,10 +107,11 @@ export function useTramDepartures(onArrival, onCrossing, paused, onDisrupt) {
           if (imminent && canFire) {
             lastFired.current[key] = now
             onArrivalRef.current?.({
-              routeNumber:       dep.route_number ?? dep.route_id,
-              stopId:            stop.id,
-              lng:               stop.lng,
-              lat:               stop.lat,
+              routeNumber:        dep.route_number ?? dep.route_id,
+              stopId:             stop.id,
+              lng:                stop.lng,
+              lat:                stop.lat,
+              directionId:        dep.direction_id ?? 0,
               scheduledDeparture: estimated,
             })
           }
