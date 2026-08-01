@@ -34,8 +34,6 @@ export function useTramDepartures(onArrival) {
       for (const stop of MONITORED_STOPS) {
         const departures = await fetchDepartures(stop.id)
 
-        const past = departures.filter(d => { const s = d.estimated_departure_utc ?? d.scheduled_departure_utc; return s && new Date(s).getTime() <= now }).length
-        console.log(`[ptv] stop ${stop.id}: ${departures.length} deps, ${past} in past, first=${first}`)
         for (const dep of departures) {
           const key = `${dep.run_ref}-${stop.id}`
           const scheduled = dep.estimated_departure_utc ?? dep.scheduled_departure_utc
@@ -44,11 +42,13 @@ export function useTramDepartures(onArrival) {
           const t = new Date(scheduled).getTime()
           const prev = prevDepartures.current[key]
 
-          const justMissed = first && t <= now && now - t < 30 * 60_000  // widened to 30 min
-          const crossedNow = !first && prev && new Date(prev).getTime() > now - POLL_MS && t <= now
+          // Fire when a departure enters the "imminent" window (due within 60s)
+          // and hasn't been fired before (no prev or prev was further away)
+          const imminent = t - now <= 60_000 && t - now > -POLL_MS
+          const notYetFired = !prev || new Date(prev).getTime() > now + 60_000
 
-          if (justMissed || crossedNow) {
-            console.log(`[ptv] arrival route=${dep.route_number ?? dep.route_id} stop=${stop.id} justMissed=${justMissed} crossedNow=${crossedNow}`)
+          if (imminent && notYetFired) {
+            console.log(`[ptv] arrival route=${dep.route_number ?? dep.route_id} stop=${stop.id} in=${Math.round((t-now)/1000)}s`)
             onArrivalRef.current({
               routeNumber: dep.route_number ?? dep.route_id,
               stopId: stop.id,
