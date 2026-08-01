@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import TramMap from './components/TramMap'
 import TonePanel from './components/TonePanel'
 import { useRoutes } from './hooks/useRoutes'
@@ -7,25 +7,9 @@ import { useToneEngine } from './hooks/useToneEngine'
 import { unlock, setBpm, playIncident } from './lib/audioEngine'
 import { buildFreqMap } from './lib/routeTones'
 import { MOCK_ROUTES } from './mock/mockData'
-import { getTramPositions, setSimulatorBpm } from './mock/simulator'
-import { ROUTE_LINES } from './mock/routeLines'
+import { setSimulatorBpm } from './mock/simulator'
 
 const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
-const LIVE_DOT_TTL   = 90_000   // ms a dot lives after appearing
-const LIVE_DOT_SPEED = 0.00014  // route-line points per ms (~12 km/h in CBD)
-
-// Snap [lng, lat] to nearest point on a route line; returns position + index
-function snapToRoute(routeNumber, lng, lat) {
-  const line = ROUTE_LINES[String(routeNumber)]
-  if (!line) return { lng, lat, index: 0 }
-  let best = line[0], bestIdx = 0, bestD = Infinity
-  for (let i = 0; i < line.length; i++) {
-    const [lx, ly] = line[i]
-    const d = (lx - lng) ** 2 + (ly - lat) ** 2
-    if (d < bestD) { bestD = d; best = line[i]; bestIdx = i }
-  }
-  return { lng: best[0], lat: best[1], index: bestIdx }
-}
 
 export default function App() {
   const { geojson, loading, error } = useRoutes()
@@ -46,8 +30,8 @@ export default function App() {
   const [scaleId, setScaleId]  = useState('min-pent')
   const [freqMap, setFreqMap]  = useState(() => buildFreqMap('min-pent'))
 
-  const handleBpmChange        = useCallback((b)  => { setBpmState(b); setBpm(b); setSimulatorBpm(b) }, [])
-  const handleScaleChange      = useCallback((id) => { setScaleId(id); setFreqMap(buildFreqMap(id)) }, [])
+  const handleBpmChange   = useCallback((b)  => { setBpmState(b); setBpm(b); setSimulatorBpm(b) }, [])
+  const handleScaleChange = useCallback((id) => { setScaleId(id); setFreqMap(buildFreqMap(id)) }, [])
 
   // ── Instrument set ────────────────────────────────────────────────────────
   const [instrumentSet, setInstrumentSet] = useState('aphex')
@@ -61,7 +45,7 @@ export default function App() {
 
   // ── Disruptions ───────────────────────────────────────────────────────────
   const [congested, setCongested] = useState(new Set())
-  const [incidents, setAccidents] = useState(new Map())   // Map<routeNumber, {lng, lat}>
+  const [incidents, setAccidents] = useState(new Map())
 
   const handleDisrupt = useCallback(({ routeNumber, kind, active, lng, lat }) => {
     if (kind === 'incident') {
@@ -90,44 +74,14 @@ export default function App() {
   // ── Tone engine ───────────────────────────────────────────────────────────
   const { trigger, triggerCrossing, active, crossings } = useToneEngine(freqMap, octave, muted, congested, incidents, instrumentSet)
 
-  // ── Live dot tracking (non-mock only) ────────────────────────────────────
-  // key → { routeNumber, lineKey, startIndex, direction, startTime, expiresAt }
-  const liveDotsRef = useRef(new Map())
-  const getLiveDots = useCallback(() => {
-    const now = Date.now()
-    const result = []
-    for (const [key, dot] of liveDotsRef.current) {
-      if (now > dot.expiresAt) { liveDotsRef.current.delete(key); continue }
-      const line = ROUTE_LINES[dot.lineKey]
-      if (!line) continue
-      const elapsed = now - dot.startTime
-      const rawIdx  = dot.startIndex + dot.direction * elapsed * LIVE_DOT_SPEED
-      const idx     = Math.max(0, Math.min(line.length - 1, Math.round(rawIdx)))
-      const [lng, lat] = line[idx]
-      result.push({ id: key, routeNumber: String(dot.routeNumber), lng, lat })
-    }
-    return result
-  }, [])
-
-  const handleArrival = useCallback((e) => {
-    trigger(e)
-    if (!IS_MOCK && e.lng != null) {
-      const key     = `${e.routeNumber}-${e.stopId}`
-      const lineKey = String(e.routeNumber)
-      const snapped = snapToRoute(e.routeNumber, e.lng, e.lat)
-      liveDotsRef.current.set(key, {
-        routeNumber: e.routeNumber,
-        lineKey,
-        startIndex:  snapped.index,
-        direction:   e.directionId === 1 ? -1 : 1,
-        startTime:   Date.now(),
-        expiresAt:   Date.now() + LIVE_DOT_TTL,
-      })
-    }
-  }, [trigger])
+  // ── Departures + positions ────────────────────────────────────────────────
+  // In mock mode: useDepartures drives the simulator and returns getTramPositions.
+  // In live mode: useLiveTrams builds a pattern cache and returns getPositions
+  //               which interpolates every active tram along its route line.
+  const handleArrival  = useCallback((e) => trigger(e),         [trigger])
   const handleCrossing = useCallback((e) => triggerCrossing(e), [triggerCrossing])
 
-  useDepartures(handleArrival, handleCrossing, paused, handleDisrupt)
+  const { getPositions } = useDepartures(handleArrival, handleCrossing, paused, handleDisrupt)
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }} onClick={unlock}>
@@ -138,7 +92,7 @@ export default function App() {
         congested={congested}
         incidents={incidents}
         stopsGeojson={IS_MOCK ? stopsGeojson : null}
-        getPositions={IS_MOCK ? getTramPositions : getLiveDots}
+        getPositions={getPositions}
       />
       <TonePanel
         active={active}     crossings={crossings}
