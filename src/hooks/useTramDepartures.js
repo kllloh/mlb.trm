@@ -34,7 +34,8 @@ export function useTramDepartures(onArrival) {
       for (const stop of MONITORED_STOPS) {
         const departures = await fetchDepartures(stop.id)
 
-        console.log(`[ptv] stop ${stop.id}: ${departures.length} deps, first=${first}`)
+        const past = departures.filter(d => { const s = d.estimated_departure_utc ?? d.scheduled_departure_utc; return s && new Date(s).getTime() <= now }).length
+        console.log(`[ptv] stop ${stop.id}: ${departures.length} deps, ${past} in past, first=${first}`)
         for (const dep of departures) {
           const key = `${dep.run_ref}-${stop.id}`
           const scheduled = dep.estimated_departure_utc ?? dep.scheduled_departure_utc
@@ -43,7 +44,7 @@ export function useTramDepartures(onArrival) {
           const t = new Date(scheduled).getTime()
           const prev = prevDepartures.current[key]
 
-          const justMissed = first && t <= now && now - t < 3 * 60_000
+          const justMissed = first && t <= now && now - t < 30 * 60_000  // widened to 30 min
           const crossedNow = !first && prev && new Date(prev).getTime() > now - POLL_MS && t <= now
 
           if (justMissed || crossedNow) {
