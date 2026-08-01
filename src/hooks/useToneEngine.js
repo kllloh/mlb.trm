@@ -27,7 +27,37 @@ export function useToneEngine(freqMap, octave, muted, congested, incidents, inst
   useEffect(() => { congestedRef.current = congested ?? new Set() }, [congested])
   useEffect(() => { incidentsRef.current = incidents ?? new Set() }, [incidents])
 
-  const trigger = useCallback(() => {}, [])
+  const trigger = useCallback(({ routeNumber }) => {
+    const key = String(routeNumber)
+    if (mutedRef.current.has(key)) return
+
+    const tone     = toneForRoute(routeNumber)
+    const baseFreq = freqMapRef.current?.[key] ?? 220
+    const freq     = baseFreq * Math.pow(2, octaveRef.current)
+
+    const incidentDelay = incidentsRef.current.has(key)
+    const extraReverb   = congestedRef.current.has(key)
+    const iset = instrumentSetRef.current
+    if (iset) {
+      playInstrument(iset, { pan: tone.pan, freq, vol: 0.45, incidentDelay, extraReverb })
+    } else {
+      playPercussion(tone.percType, {
+        pan: tone.pan, freq, vol: 0.45,
+        delayed: Math.random() < 0.25, incidentDelay, extraReverb,
+      })
+    }
+
+    setActive(prev => {
+      const next = new Map(prev)
+      next.set(key, { percLabel: tone.percLabel, color: tone.color, routeNumber: key })
+      return next
+    })
+    if (activeTimers.current.has(key)) clearTimeout(activeTimers.current.get(key))
+    activeTimers.current.set(key, setTimeout(() => {
+      setActive(prev => { const n = new Map(prev); n.delete(key); return n })
+      activeTimers.current.delete(key)
+    }, FLASH_MS))
+  }, [])
 
   const triggerCrossing = useCallback(({ routeNumber }) => {
     const key = String(routeNumber)
