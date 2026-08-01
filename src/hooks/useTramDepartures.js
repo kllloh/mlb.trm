@@ -12,7 +12,7 @@ const MONITORED_STOPS = [
 
 const STOP_COORDS = Object.fromEntries(MONITORED_STOPS.map(s => [s.id, { lng: s.lng, lat: s.lat }]))
 
-const POLL_MS = 30_000
+const POLL_MS = 10_000
 
 // Fires onArrival({ routeNumber, stopId, lng, lat, scheduledDeparture }) when
 // a departure is detected. On the first poll, fires for any departure within
@@ -48,7 +48,6 @@ export function useTramDepartures(onArrival) {
           const notYetFired = !prev || new Date(prev).getTime() > now + 60_000
 
           if (imminent && notYetFired) {
-            console.log(`[ptv] arrival route=${dep.route_number ?? dep.route_id} stop=${stop.id} in=${Math.round((t-now)/1000)}s`)
             onArrivalRef.current({
               routeNumber: dep.route_number ?? dep.route_id,
               stopId: stop.id,
