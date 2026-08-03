@@ -1,12 +1,27 @@
 // ── Audio graph ───────────────────────────────────────────────────────────────
 let AC = null, master = null, shortReverb = null, longReverb = null
 let BPM = 120
+let beatStart = null   // AC.currentTime when the beat clock started
 
 // Beat subdivisions (fractions of a quarter note) used for delay times.
 // Returns absolute seconds so any BPM produces in-tempo echoes.
 function beatSecs(...divs) { return divs.map(d => (60 / BPM) * d) }
 
 export function setBpm(bpm) { BPM = bpm }
+
+// ── Beat-grid helpers (used by the quantized scheduler in useToneEngine) ──────
+const GRID_SUBDIVS = 4  // 16th notes
+
+export function getSubdivSecs()  { return 60 / BPM / GRID_SUBDIVS }
+export function getAudioTime()   { return AC ? AC.currentTime : null }
+
+/** Returns the AC.currentTime of the next 16th-note grid point from right now. */
+export function getNextGridTime() {
+  if (!AC || beatStart === null) return AC ? AC.currentTime : 0
+  const sub  = getSubdivSecs()
+  const ticks = Math.ceil((AC.currentTime - beatStart) / sub)
+  return beatStart + ticks * sub
+}
 
 function buildImpulse(seconds, decay, preDelaySec = 0) {
   const rate = AC.sampleRate
@@ -466,13 +481,13 @@ export const INSTRUMENT_SET_IDS = Object.keys(INSTRUMENT_FNS)
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export function playInstrument(setName, { pan=0, vol=0.5, freq=440, incidentDelay=false, extraReverb=false } = {}) {
+export function playInstrument(setName, { pan=0, vol=0.5, freq=440, incidentDelay=false, extraReverb=false, startAt } = {}) {
   if (!AC || AC.state === 'suspended') return
   const fn  = INSTRUMENT_FNS[setName]
   const cfg = INSTRUMENT_CFG[setName]
   if (!fn) return
 
-  const now    = AC.currentTime
+  const now    = startAt ?? AC.currentTime
   const panner = AC.createStereoPanner(); panner.pan.value = pan
 
   const dryG = AC.createGain(); dryG.gain.value = 1 - cfg.wet
@@ -504,9 +519,9 @@ export function playInstrument(setName, { pan=0, vol=0.5, freq=440, incidentDela
   fn(panner, now, vol, freq)
 }
 
-export function playPercussion(type, { pan=0, vol=0.52, wet=0.22, freq, delayed=false, incidentDelay=false, extraReverb=false } = {}) {
+export function playPercussion(type, { pan=0, vol=0.52, wet=0.22, freq, delayed=false, incidentDelay=false, extraReverb=false, startAt } = {}) {
   if (!AC || AC.state==='suspended') return
-  const now = AC.currentTime
+  const now = startAt ?? AC.currentTime
 
   const panner = AC.createStereoPanner(); panner.pan.value = pan
 
@@ -604,4 +619,8 @@ export function playIncident({ pan = 0 } = {}) {
   })
 }
 
-export function unlock() { setup(); if (AC.state==='suspended') AC.resume() }
+export function unlock() {
+  setup()
+  if (AC.state === 'suspended') AC.resume()
+  if (beatStart === null) beatStart = AC.currentTime
+}
