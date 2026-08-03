@@ -2,8 +2,6 @@ import { useRef, useEffect, useCallback } from 'react'
 import { ptvGet } from '../lib/ptv'
 import { ROUTE_LINES } from '../mock/routeLines'
 
-// Same 25 CBD stops — every Melbourne tram route passes through here,
-// so we discover all active run_refs from these alone.
 const MONITORED_STOPS = [
   { id: 2091, lng: 144.95378, lat: -37.81696 },
   { id: 2087, lng: 144.95763, lat: -37.81586 },
@@ -38,31 +36,38 @@ const REFIRE_MS        = 90_000
 const CROSSING_WINDOW  = 8 * 60_000
 const CROSSING_COOLDOWN = 30_000
 const CONGESTION_THRESH = 2 * 60_000
-const PATTERN_TTL      = 4 * 60 * 60_000   // reuse patterns for 4 h
-const PATTERN_BATCH    = 20                 // parallel pattern fetches per cycle
+const PATTERN_TTL      = 4 * 60 * 60_000
+const PATTERN_BATCH    = 20   // parallel API calls per batch
+
+// Immediate dot: speed along route-line points at ~12 km/h
+const SNAP_SPEED       = 0.00014   // points per ms
+const SNAP_TTL         = 90_000
 
 const ALL_ROUTES = ['1','3','5','6','8','11','12','16','19','30','35','48','57','58','59','64','67','70','72','75','78','82','86','96','109','112']
 
 function snapIndex(routeNumber, lng, lat) {
   const line = ROUTE_LINES[String(routeNumber)]
-  if (!line?.length) return { index: 0 }
+  if (!line?.length) return null
   let bestIdx = 0, bestD = Infinity
   for (let i = 0; i < line.length; i++) {
     const d = (line[i][0] - lng) ** 2 + (line[i][1] - lat) ** 2
     if (d < bestD) { bestD = d; bestIdx = i }
   }
-  return { index: bestIdx }
+  return bestIdx
 }
 
 export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
-  // run_ref → { routeNumber, stops: [{t, index}], fetchedAt }
+  // Pattern cache: run_ref → { routeNumber, stops:[{t,index}], fetchedAt }
   const patternCache = useRef(new Map())
-  // run_refs discovered but not yet fetched
-  const pendingRefs  = useRef(new Map())  // run_ref → routeNumber
+  // Pending pattern fetches: run_ref → routeNumber
+  const pendingRefs  = useRef(new Map())
+  // Immediate snap dots: key → { routeNumber, lineIdx, direction, startTime, expiresAt }
+  const snapDots     = useRef(new Map())
 
-  const lastFired    = useRef(new Map())  // `${run_ref}-${stopId}` → ms
-  const crossingLast = useRef(new Map())  // routeNumber → ms
+  const lastFired    = useRef(new Map())
+  const crossingLast = useRef(new Map())
   const congestedRef = useRef(new Set())
+  const drainingRef  = useRef(false)
 
   const onArrivalRef  = useRef(onArrival)
   const onCrossingRef = useRef(onCrossing)
@@ -71,40 +76,48 @@ export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
   onCrossingRef.current = onCrossing
   onDisruptRef.current  = onDisrupt
 
-  // Fetch patterns for any pending run_refs in batches
+  // Drain ALL pending patterns, in parallel batches of PATTERN_BATCH
   const drainPending = useCallback(async () => {
-    const now = Date.now()
-    const batch = [...pendingRefs.current.entries()].slice(0, PATTERN_BATCH)
-    if (!batch.length) return
+    if (drainingRef.current) return
+    drainingRef.current = true
+    try {
+      while (pendingRefs.current.size > 0) {
+        const batch = [...pendingRefs.current.entries()].slice(0, PATTERN_BATCH)
+        // Delete before fetching so re-discovered refs don't double-fetch
+        for (const [ref] of batch) pendingRefs.current.delete(ref)
 
-    await Promise.allSettled(batch.map(async ([run_ref, routeNumber]) => {
-      pendingRefs.current.delete(run_ref)
-      try {
-        const data = await ptvGet(
-          `/v3/pattern/run/${encodeURIComponent(run_ref)}/route_type/1?expand=stop`
-        )
-        const stops = (data.departures ?? [])
-          .filter(d => d.scheduled_departure_utc)
-          .map(d => {
-            const s = data.stops?.[d.stop_id]
-            if (!s) return null
-            const { index } = snapIndex(routeNumber, s.stop_longitude, s.stop_latitude)
-            return {
-              t: new Date(d.estimated_departure_utc ?? d.scheduled_departure_utc).getTime(),
-              index,
+        const now = Date.now()
+        await Promise.allSettled(batch.map(async ([run_ref, routeNumber]) => {
+          try {
+            const data = await ptvGet(
+              `/v3/pattern/run/${encodeURIComponent(run_ref)}/route_type/1?expand=stop`
+            )
+            const stops = (data.departures ?? [])
+              .filter(d => d.scheduled_departure_utc)
+              .map(d => {
+                const s = data.stops?.[d.stop_id]
+                if (!s) return null
+                const idx = snapIndex(routeNumber, s.stop_longitude, s.stop_latitude)
+                if (idx == null) return null
+                return {
+                  t: new Date(d.estimated_departure_utc ?? d.scheduled_departure_utc).getTime(),
+                  index: idx,
+                }
+              })
+              .filter(Boolean)
+              .sort((a, b) => a.t - b.t)
+
+            if (stops.length >= 2) {
+              patternCache.current.set(run_ref, { routeNumber, stops, fetchedAt: now })
             }
-          })
-          .filter(Boolean)
-          .sort((a, b) => a.t - b.t)
-
-        if (stops.length >= 2) {
-          patternCache.current.set(run_ref, { routeNumber, stops, fetchedAt: now })
-        }
-      } catch { /* network error — skip this run */ }
-    }))
+          } catch { /* skip failed fetches */ }
+        }))
+      }
+    } finally {
+      drainingRef.current = false
+    }
   }, [])
 
-  // Main polling loop: discover run_refs and fire audio events
   const poll = useCallback(async () => {
     const now = Date.now()
     const routeDirs   = new Map()
@@ -138,26 +151,25 @@ export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
 
         const st    = new Date(scheduled).getTime()
         const et    = new Date(estimated).getTime()
-        const delay = et - st
 
-        // Queue pattern fetch if we haven't seen this run yet
+        // Queue pattern fetch for unknown runs
         if (dep.run_ref && dep.route_number != null &&
             !patternCache.current.has(dep.run_ref) &&
             !pendingRefs.current.has(dep.run_ref)) {
           pendingRefs.current.set(dep.run_ref, dep.route_number)
         }
 
-        // Congestion sampling
+        // Congestion
         if (!routeDelays.has(rn)) routeDelays.set(rn, [])
-        routeDelays.get(rn).push(delay)
+        routeDelays.get(rn).push(et - st)
 
-        // Crossing detection window
+        // Crossing window
         if (et > now && et - now < CROSSING_WINDOW) {
           if (!routeDirs.has(rn)) routeDirs.set(rn, new Set())
           routeDirs.get(rn).add(dep.direction_id)
         }
 
-        // Arrival audio trigger
+        // Arrival trigger + immediate snap dot
         const key      = `${dep.run_ref}-${stop.id}`
         const imminent = et - now <= ARRIVAL_WINDOW && et > now - 10_000
         const canFire  = now - (lastFired.current.get(key) ?? 0) > REFIRE_MS
@@ -171,11 +183,22 @@ export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
             directionId:        dep.direction_id ?? 0,
             scheduledDeparture: estimated,
           })
+          // Snap dot for immediate visual (replaced once pattern is cached)
+          const lineIdx = snapIndex(dep.route_number, stop.lng, stop.lat)
+          if (lineIdx != null) {
+            snapDots.current.set(key, {
+              routeNumber: dep.route_number,
+              lineIdx,
+              direction:  dep.direction_id === 1 ? -1 : 1,
+              startTime:  now,
+              expiresAt:  now + SNAP_TTL,
+            })
+          }
         }
       }
     }
 
-    // Expire stale patterns
+    // Expire old patterns
     for (const [ref, p] of patternCache.current) {
       if (now - p.fetchedAt > PATTERN_TTL) patternCache.current.delete(ref)
     }
@@ -191,7 +214,7 @@ export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
       }
     }
 
-    // Congestion state transitions
+    // Congestion transitions
     const nowCongested = new Set()
     for (const [rn, delays] of routeDelays) {
       if (delays.reduce((a, b) => a + b, 0) / delays.length > CONGESTION_THRESH)
@@ -199,18 +222,16 @@ export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
     }
     for (const rn of nowCongested) {
       if (!congestedRef.current.has(rn)) {
-        congestedRef.current.add(rn)
-        onDisruptRef.current?.({ routeNumber: rn, kind: 'congestion', active: true })
+        congestedRef.current.add(rn); onDisruptRef.current?.({ routeNumber: rn, kind: 'congestion', active: true })
       }
     }
     for (const rn of [...congestedRef.current]) {
       if (!nowCongested.has(rn)) {
-        congestedRef.current.delete(rn)
-        onDisruptRef.current?.({ routeNumber: rn, kind: 'congestion', active: false })
+        congestedRef.current.delete(rn); onDisruptRef.current?.({ routeNumber: rn, kind: 'congestion', active: false })
       }
     }
 
-    // Fetch pending patterns in background
+    // Drain ALL newly discovered patterns (non-blocking — runs in background)
     drainPending()
   }, [drainPending])
 
@@ -228,16 +249,13 @@ export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
     const id = setInterval(() => {
       const now = Date.now()
       for (const [rn, until] of [...active]) {
-        if (now > until) {
-          active.delete(rn)
-          onDisruptRef.current?.({ routeNumber: rn, kind: 'incident', active: false })
-        }
+        if (now > until) { active.delete(rn); onDisruptRef.current?.({ routeNumber: rn, kind: 'incident', active: false }) }
       }
       if (Math.random() < 0.12) {
         const rn   = ALL_ROUTES[Math.floor(Math.random() * ALL_ROUTES.length)]
         const stop = MONITORED_STOPS[Math.floor(Math.random() * MONITORED_STOPS.length)]
         if (!active.has(rn)) {
-          const until = Date.now() + (60 + Math.random() * 120) * 1000
+          const until = now + (60 + Math.random() * 120) * 1000
           active.set(rn, until)
           onDisruptRef.current?.({ routeNumber: rn, kind: 'incident', active: true, lng: stop.lng, lat: stop.lat })
         }
@@ -246,34 +264,46 @@ export function useLiveTrams(onArrival, onCrossing, paused, onDisrupt) {
     return () => clearInterval(id)
   }, [paused])
 
-  // Called every animation frame by TramMap — must be fast
+  // Called every animation frame — must be fast
   const getPositions = useCallback(() => {
     const now = Date.now()
     const result = []
+    const seen   = new Set()   // run_ref keys already rendered via pattern cache
 
+    // Priority 1: pattern-interpolated positions (accurate schedule interpolation)
     for (const [run_ref, { routeNumber, stops }] of patternCache.current) {
       if (stops.length < 2) continue
       const first = stops[0].t
       const last  = stops[stops.length - 1].t
-      if (now < first || now > last + 5 * 60_000) continue  // not started or long finished
+      if (now < first || now > last + 5 * 60_000) continue
 
       const line = ROUTE_LINES[String(routeNumber)]
       if (!line?.length) continue
 
-      // Find the stop interval containing now
       let prev = stops[0], next = stops[1]
       for (let i = 1; i < stops.length; i++) {
         if (stops[i].t > now) { prev = stops[i - 1]; next = stops[i]; break }
         prev = next = stops[i]
       }
-
       const span = next.t - prev.t
       const frac = span > 0 ? Math.min(1, Math.max(0, (now - prev.t) / span)) : 1
-      const idx  = Math.max(0, Math.min(line.length - 1,
-        Math.round(prev.index + (next.index - prev.index) * frac)
-      ))
+      const idx  = Math.max(0, Math.min(line.length - 1, Math.round(prev.index + (next.index - prev.index) * frac)))
       const [lng, lat] = line[idx]
       result.push({ id: run_ref, routeNumber: String(routeNumber), lng, lat })
+      seen.add(run_ref)
+    }
+
+    // Priority 2: immediate snap dots for newly-fired arrivals not yet in pattern cache
+    for (const [key, dot] of snapDots.current) {
+      if (now > dot.expiresAt) { snapDots.current.delete(key); continue }
+      if (seen.has(key)) continue   // already rendered via pattern
+      const line = ROUTE_LINES[String(dot.routeNumber)]
+      if (!line?.length) continue
+      const elapsed = now - dot.startTime
+      const rawIdx  = dot.lineIdx + dot.direction * elapsed * SNAP_SPEED
+      const idx     = Math.max(0, Math.min(line.length - 1, Math.round(rawIdx)))
+      const [lng, lat] = line[idx]
+      result.push({ id: key, routeNumber: String(dot.routeNumber), lng, lat })
     }
 
     return result
