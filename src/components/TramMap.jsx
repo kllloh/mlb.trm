@@ -4,7 +4,7 @@ import maplibregl from 'maplibre-gl'
 const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json'
 const MELBOURNE  = { lng: 144.9631, lat: -37.8136 }
 
-const DOT_TICK_MS  = 80    // ~12 fps for live dot positions
+const DOT_TICK_MS  = 0     // update every frame for smooth movement
 const HALO_MS      = 3200  // crossing halo fade duration
 
 const CBD_GEOJSON = {
