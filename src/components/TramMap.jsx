@@ -169,9 +169,6 @@ export default function TramMap({ geojson, activeRoutes, crossings, congested, i
         paint: {
           'circle-radius': ['coalesce', ['get', 'dotRadius'], 4],
           'circle-color': ['coalesce', ['get', 'dotColor'], '#ffffff'],
-          'circle-stroke-width': 1.5,
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-opacity': 0.7,
           'circle-opacity': 0.95,
         },
       })
