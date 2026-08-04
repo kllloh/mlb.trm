@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, v0-no-api]
 
 permissions:
   contents: read
@@ -20,7 +20,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
+      # ── Build main → dist/ ────────────────────────────────────────────────
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-node@v4
         with:
@@ -28,11 +31,27 @@ jobs:
           cache: npm
 
       - run: npm ci
-
       - run: npm run build
         env:
           VITE_USE_MOCK: true
 
+      # ── Build v0-no-api → dist/v0/ ────────────────────────────────────────
+      - uses: actions/checkout@v4
+        with:
+          ref: v0-no-api
+          path: v0-src
+
+      - run: npm ci
+        working-directory: v0-src
+
+      - run: npx vite build --base /mlb.trm/v0/
+        working-directory: v0-src
+        env:
+          VITE_USE_MOCK: true
+
+      - run: mkdir -p dist/v0 && cp -r v0-src/dist/. dist/v0/
+
+      # ── Deploy combined dist/ to Pages ────────────────────────────────────
       - uses: actions/configure-pages@v4
 
       - uses: actions/upload-pages-artifact@v3
