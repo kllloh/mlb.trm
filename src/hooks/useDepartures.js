@@ -1,6 +1,5 @@
 import { useCallback } from 'react'
 import { useMockDepartures } from './useMockDepartures'
-import { useLiveTrams } from './useLiveTrams'
 import { useGtfsSimulation } from './useGtfsSimulation'
 import { getTramPositions } from '../mock/simulator'
 
@@ -12,11 +11,5 @@ function useMockWithPositions(onArrival, onCrossing, paused, onDisrupt) {
   return { getPositions }
 }
 
-// Live mode: PTV API polling drives audio events; GTFS schedule drives dot positions
-function useLiveWithGtfs(onArrival, onCrossing, paused, onDisrupt) {
-  useLiveTrams(onArrival, onCrossing, paused, onDisrupt)
-  const { getPositions } = useGtfsSimulation()
-  return { getPositions }
-}
-
-export const useDepartures = USE_MOCK ? useMockWithPositions : useLiveWithGtfs
+// Live mode: fully driven by local GTFS data — no external API needed
+export const useDepartures = USE_MOCK ? useMockWithPositions : useGtfsSimulation
